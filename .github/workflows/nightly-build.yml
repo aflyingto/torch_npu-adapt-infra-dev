@@ -61,9 +61,15 @@ jobs:
           python -m pip install --upgrade pip
           DATE="${{ inputs.torch_nightly_date }}"
           if [ -n "$DATE" ]; then
-            # Use wildcard to match any major version, +cpu suffix required for CPU index
-            python -m pip install "torch==*.dev${DATE}+cpu" --index-url https://download.pytorch.org/whl/nightly/cpu
-            VERSION=$(python -c "import torch; print(torch.__version__)")
+            # Query available versions and find one matching the date
+            AVAILABLE=$(pip index versions torch --index-url https://download.pytorch.org/whl/nightly/cpu 2>/dev/null | grep -oE "[0-9]+\.[0-9]+\.[0-9]+\.dev${DATE}\+cpu" | head -1)
+            if [ -z "$AVAILABLE" ]; then
+              echo "ERROR: No torch version found for date ${DATE}"
+              exit 1
+            fi
+            echo "Installing torch==${AVAILABLE}"
+            python -m pip install "torch==${AVAILABLE}" --index-url https://download.pytorch.org/whl/nightly/cpu
+            VERSION="${AVAILABLE}"
           else
             python -m pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
             VERSION=$(python -c "import torch; print(torch.__version__)")
