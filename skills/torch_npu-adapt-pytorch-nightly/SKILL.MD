@@ -27,7 +27,7 @@
 5. 配置 ccache：设置 max-size、zero-stats、环境变量
 6. 安装 PyTorch nightly：
    - 升级 pip
-   - 若指定日期：使用 `pip index versions` 查询匹配日期的版本（格式：`X.Y.Z.dev${DATE}+cpu`），然后安装
+   - 若指定日期：依次尝试不同主版本（2.12.0, 2.11.0, 2.10.0）安装 `torch==${MAJOR}.dev${DATE}+cpu`
    - 否则：安装最新 `torch --pre`（从 nightly/cpu 索引）
    - 输出版本到 `$GITHUB_OUTPUT`
 7. 克隆 `Ascend/pytorch`：
