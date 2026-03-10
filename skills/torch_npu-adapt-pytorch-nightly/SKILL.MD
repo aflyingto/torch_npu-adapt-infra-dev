@@ -129,9 +129,25 @@ echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
   - 在 `ascend_pytorch` 目录下执行
   - 日志输出：`python setup.py build bdist_wheel 2>&1 | tee /tmp/build.log`
   - 使用 `${PIPESTATUS[0]}` 获取构建状态
+- **必须**在构建命令后执行 `exit ${BUILD_STATUS}`，确保构建失败时步骤正确失败
 - 构建成功时：
   - 列出生成的 wheel 文件
   - 输出到 `$GITHUB_OUTPUT`
+
+**构建步骤示例**：
+```bash
+cd ascend_pytorch
+export DISABLE_INSTALL_TORCHAIR=FALSE
+export BUILD_WITHOUT_SHA=1
+python setup.py build bdist_wheel 2>&1 | tee /tmp/build.log
+BUILD_STATUS=${PIPESTATUS[0]}
+echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
+if [ ${BUILD_STATUS} -eq 0 ]; then
+  WHL=$(ls dist/*.whl 2>/dev/null | head -1)
+  echo "wheel=${WHL}" >> $GITHUB_OUTPUT
+fi
+exit ${BUILD_STATUS}  # 必须：确保构建失败时步骤失败
+```
 
 ## 6. Patch 应用规则
 
@@ -147,13 +163,15 @@ echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 ### 构建信息表格
 
 - 使用表格格式输出构建信息：
-  - 表头：`| 项目 | 详情 |`
-  - 包含：构建时间、PyTorch Nightly 版本、Ascend/pytorch Commit（带链接）、Commit 时间、已应用 Patch、ccache 命中、ccache 命中率、构建结果
-- 构建结果使用图标：
-  - 成功：`✅ SUCCESS`
-  - 失败：`❌ FAILED`
+  - 表头：`| Item | Details |`
+  - 包含：构建时间、PyTorch Nightly 版本、Ascend/pytorch Commit（带链接）、Commit 时间、已应用 Patch、构建结果
+- 构建结果使用文本：
+  - 成功：`SUCCESS`
+  - 失败：`FAILED`
 - 成功时列出 wheel 文件
 - 失败时提示查看 build-log artifact
+
+**注意**：不要尝试解析 ccache 输出计算命中率，ccache 统计已在上一步骤以代码块格式输出。
 
 ### 兼容性问题分析报告
 
@@ -198,8 +216,9 @@ fi
 1. 日志 artifact 必须 `if: always()`
    - 保证失败时也能下载日志
 
-2. wheel 上传必须仅在成功时执行
-   - 条件：`if: success()` 或检查构建状态
+2. wheel 上传必须检查构建状态
+   - 条件：`if: steps.build.outputs.status == '0'`
+   - 不要使用 `if: success()`，因为即使构建失败，前面的步骤可能都成功了
 
 3. ccache 统计必须 `if: always()`
    - 即使构建失败也要显示缓存统计
