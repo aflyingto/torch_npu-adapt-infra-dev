@@ -127,9 +127,13 @@ jobs:
           cd ascend_pytorch
           export DISABLE_INSTALL_TORCHAIR=FALSE
           export BUILD_WITHOUT_SHA=1
+          START_TIME=$(date +%s)
           python setup.py build bdist_wheel 2>&1 | tee /tmp/build.log
           BUILD_STATUS=${PIPESTATUS[0]}
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
           echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
+          echo "duration=${DURATION}" >> $GITHUB_OUTPUT
           if [ ${BUILD_STATUS} -eq 0 ]; then
             WHL=$(ls dist/*.whl 2>/dev/null | head -1)
             echo "wheel=${WHL}" >> $GITHUB_OUTPUT
@@ -165,10 +169,20 @@ jobs:
         if: always()
         run: |
           BUILD_STATUS="${{ steps.build.outputs.status }}"
+          BUILD_DURATION="${{ steps.build.outputs.duration }}"
           if [ "${BUILD_STATUS}" = "0" ]; then
             STATUS_ICON="SUCCESS"
           else
             STATUS_ICON="FAILED"
+          fi
+
+          # Format build duration
+          if [ -n "${BUILD_DURATION}" ] && [ "${BUILD_DURATION}" -gt 0 ] 2>/dev/null; then
+            MINUTES=$((BUILD_DURATION / 60))
+            SECONDS=$((BUILD_DURATION % 60))
+            DURATION_FMT="${MINUTES}m ${SECONDS}s"
+          else
+            DURATION_FMT="N/A"
           fi
 
           echo "## Build Information" >> $GITHUB_STEP_SUMMARY
@@ -176,6 +190,7 @@ jobs:
           echo "| Item | Details |" >> $GITHUB_STEP_SUMMARY
           echo "|------|------|" >> $GITHUB_STEP_SUMMARY
           echo "| Build Time | $(date -u '+%Y-%m-%d %H:%M UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Duration | ${DURATION_FMT} |" >> $GITHUB_STEP_SUMMARY
           echo "| PyTorch Nightly | \`${{ steps.install_torch.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Ascend/pytorch Commit | [\`${{ steps.clone_repo.outputs.commit_short }}\`](https://github.com/Ascend/pytorch/commit/${{ steps.clone_repo.outputs.commit }}) |" >> $GITHUB_STEP_SUMMARY
           echo "| Commit Time | ${{ steps.clone_repo.outputs.commit_date }} |" >> $GITHUB_STEP_SUMMARY

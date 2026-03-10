@@ -139,9 +139,13 @@ echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
 cd ascend_pytorch
 export DISABLE_INSTALL_TORCHAIR=FALSE
 export BUILD_WITHOUT_SHA=1
+START_TIME=$(date +%s)  # 记录开始时间
 python setup.py build bdist_wheel 2>&1 | tee /tmp/build.log
 BUILD_STATUS=${PIPESTATUS[0]}
+END_TIME=$(date +%s)  # 记录结束时间
+DURATION=$((END_TIME - START_TIME))
 echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
+echo "duration=${DURATION}" >> $GITHUB_OUTPUT  # 输出构建时长（秒）
 if [ ${BUILD_STATUS} -eq 0 ]; then
   WHL=$(ls dist/*.whl 2>/dev/null | head -1)
   echo "wheel=${WHL}" >> $GITHUB_OUTPUT
@@ -164,7 +168,8 @@ exit ${BUILD_STATUS}  # 必须：确保构建失败时步骤失败
 
 - 使用表格格式输出构建信息：
   - 表头：`| Item | Details |`
-  - 包含：构建时间、PyTorch Nightly 版本、Ascend/pytorch Commit（带链接）、Commit 时间、已应用 Patch、构建结果
+  - 包含：构建时间、构建时长、PyTorch Nightly 版本、Ascend/pytorch Commit（带链接）、Commit 时间、已应用 Patch、构建结果
+- 构建时长格式化：将秒数转换为 `Xm Ys` 格式（如 `54m 13s`）
 - 构建结果使用文本：
   - 成功：`SUCCESS`
   - 失败：`FAILED`
