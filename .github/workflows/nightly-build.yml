@@ -209,9 +209,10 @@ jobs:
           # CCache hit rate
           CCACHE_STATS=$(ccache --show-stats 2>/dev/null || echo "")
           if [ -n "$CCACHE_STATS" ]; then
-            CACHE_HIT=$(echo "$CCACHE_STATS" | grep "Cache hit" | awk '{print $NF}' || echo "0")
-            CACHE_MISS=$(echo "$CCACHE_STATS" | grep "Cache miss" | awk '{print $NF}' || echo "0")
-            if [ "$CACHE_HIT" != "0" ] || [ "$CACHE_MISS" != "0" ]; then
+            # Parse new ccache output format: "  Hits: 14 / 519" and "  Misses: 505 / 519"
+            CACHE_HIT=$(echo "$CCACHE_STATS" | grep -E "^\s*Hits:" | awk '{print $2}' | tr -d '/' || echo "0")
+            CACHE_MISS=$(echo "$CCACHE_STATS" | grep -E "^\s*Misses:" | awk '{print $2}' | tr -d '/' || echo "0")
+            if [ -n "$CACHE_HIT" ] && [ -n "$CACHE_MISS" ] && { [ "$CACHE_HIT" != "0" ] || [ "$CACHE_MISS" != "0" ]; }; then
               HIT_RATE=$(awk "BEGIN {if (($CACHE_HIT + $CACHE_MISS) > 0) printf \"%.1f%%\", ($CACHE_HIT / ($CACHE_HIT + $CACHE_MISS)) * 100; else print \"0.0%\"}")
               echo "| CCache Hit Rate | ${HIT_RATE} |" >> $GITHUB_STEP_SUMMARY
             fi
