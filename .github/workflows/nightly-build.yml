@@ -2,13 +2,13 @@ name: Ascend/pytorch Nightly Build Validation
 
 on:
   schedule:
-    - cron: '0 2 * * *'  # UTC 02:00 = 北京时间 10:00
+    - cron: '0 2 * * *'   # 每天 UTC 02:00（北京时间 10:00）
   workflow_dispatch:
     inputs:
       torch_nightly_date:
-        description: 'PyTorch nightly date (YYYYMMDD format, e.g., 20260307)'
+        description: 'PyTorch nightly 日期 (格式: YYYYMMDD，留空使用最新版)'
         required: false
-        type: string
+        default: ''
   push:
     paths:
       - '.github/workflows/nightly-build.yml'
@@ -24,18 +24,23 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build gcc g++ git patchelf ccache
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build \
+            gcc g++ \
+            git \
+            patchelf \
+            ccache
 
       - name: Setup ccache
         uses: actions/cache@v4
@@ -55,112 +60,87 @@ jobs:
           echo "CXX=ccache g++" >> $GITHUB_ENV
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
 
-      - name: Install PyTorch nightly
-        id: install-torch
+      - name: Install PyTorch nightly (CPU, x86_64)
+        id: install_torch
         run: |
-          python -m pip install --upgrade pip
-
-          TORCH_DATE="${{ inputs.torch_nightly_date }}"
-          MAJOR_VERSIONS=("2.12.0" "2.11.0" "2.10.0")
-
-          if [ -n "$TORCH_DATE" ]; then
-            # Try each major version until one succeeds
-            for MAJOR in "${MAJOR_VERSIONS[@]}"; do
-              TORCH_VERSION="${MAJOR}.dev${TORCH_DATE}+cpu"
-              echo "Trying to install torch==${TORCH_VERSION}..."
-              if pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/nightly/cpu; then
-                echo "Successfully installed torch==${TORCH_VERSION}"
-                echo "torch_version=${TORCH_VERSION}" >> $GITHUB_OUTPUT
+          pip install --upgrade pip
+          DATE="${{ github.event.inputs.torch_nightly_date }}"
+          if [ -n "$DATE" ]; then
+            # 依次尝试不同主版本号
+            for MAJOR in "2.12.0" "2.11.0" "2.10.0"; do
+              VERSION="${MAJOR}.dev${DATE}+cpu"
+              echo "尝试安装 torch==${VERSION}..."
+              if pip install --pre "torch==${VERSION}" --index-url https://download.pytorch.org/whl/nightly/cpu 2>/dev/null; then
+                echo "成功安装 torch==${VERSION}"
                 break
               fi
             done
           else
-            # Install latest nightly
             pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cpu
-            TORCH_VERSION=$(python -c "import torch; print(torch.__version__)")
-            echo "torch_version=${TORCH_VERSION}" >> $GITHUB_OUTPUT
           fi
+          TORCH_VER=$(python -c "import torch; print(torch.__version__)")
+          echo "version=${TORCH_VER}" >> $GITHUB_OUTPUT
+          echo "PyTorch nightly version: ${TORCH_VER}"
 
-          # Verify installation
-          python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
-
-      - name: Clone Ascend/pytorch
-        id: clone
+      - name: Clone Ascend/pytorch (with submodules)
+        id: clone_repo
         run: |
-          git clone --depth=1 --recurse-submodules https://github.com/Ascend/pytorch.git ascend_pytorch
+          git clone --depth=1 --recurse-submodules \
+            https://github.com/Ascend/pytorch.git ascend_pytorch
           cd ascend_pytorch
-          COMMIT_HASH=$(git rev-parse HEAD)
+          COMMIT=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
-          COMMIT_DATE=$(git log -1 --format=%ci)
-          echo "commit_hash=${COMMIT_HASH}" >> $GITHUB_OUTPUT
+          COMMIT_DATE=$(git log -1 --format='%ci')
+          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
           echo "commit_short=${COMMIT_SHORT}" >> $GITHUB_OUTPUT
           echo "commit_date=${COMMIT_DATE}" >> $GITHUB_OUTPUT
+          echo "Ascend/pytorch commit: ${COMMIT} (${COMMIT_DATE})"
 
       - name: Install Python build dependencies
         run: |
+          cd ascend_pytorch
           pip install pyyaml setuptools auditwheel
 
       - name: Apply compatibility patches
-        id: patches
+        id: patch
         run: |
-          PATCH_DIR="patches"
+          PATCH_DIR="${GITHUB_WORKSPACE}/patches"
           PATCH_APPLIED=""
           PATCH_FAILED=""
+          for p in "${PATCH_DIR}"/*.patch; do
+            [ -f "$p" ] || continue
+            echo "Applying patch: $(basename $p)"
+            if git apply --directory=ascend_pytorch "$p"; then
+              echo "  OK"
+              PATCH_APPLIED="${PATCH_APPLIED} $(basename $p)"
+            else
+              echo "  FAILED (may already be merged upstream)"
+              PATCH_FAILED="${PATCH_FAILED} $(basename $p)"
+            fi
+          done
+          echo "applied=${PATCH_APPLIED}" >> $GITHUB_OUTPUT
+          echo "failed=${PATCH_FAILED}"   >> $GITHUB_OUTPUT
 
-          if [ -d "$PATCH_DIR" ]; then
-            for p in "${PATCH_DIR}"/*.patch; do
-              [ -f "$p" ] || continue
-              PATCH_NAME=$(basename "$p")
-              echo "Applying patch: $PATCH_NAME"
-              if git apply --directory=ascend_pytorch "$p"; then
-                echo "✓ Successfully applied: $PATCH_NAME"
-                if [ -n "$PATCH_APPLIED" ]; then
-                  PATCH_APPLIED="${PATCH_APPLIED}, ${PATCH_NAME}"
-                else
-                  PATCH_APPLIED="${PATCH_NAME}"
-                fi
-              else
-                echo "✗ Failed to apply: $PATCH_NAME"
-                if [ -n "$PATCH_FAILED" ]; then
-                  PATCH_FAILED="${PATCH_FAILED}, ${PATCH_NAME}"
-                else
-                  PATCH_FAILED="${PATCH_NAME}"
-                fi
-              fi
-            done
-          fi
-
-          echo "patch_applied=${PATCH_APPLIED}" >> $GITHUB_OUTPUT
-          echo "patch_failed=${PATCH_FAILED}" >> $GITHUB_OUTPUT
-
-      - name: Build wheel
+      - name: Build torch_npu wheel
         id: build
         run: |
+          cd ascend_pytorch
           export DISABLE_INSTALL_TORCHAIR=FALSE
           export BUILD_WITHOUT_SHA=1
-
-          cd ascend_pytorch
           python setup.py build bdist_wheel 2>&1 | tee /tmp/build.log
           BUILD_STATUS=${PIPESTATUS[0]}
-
-          if [ $BUILD_STATUS -eq 0 ]; then
-            echo "build_status=success" >> $GITHUB_OUTPUT
-            WHEEL_FILES=$(ls dist/*.whl 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-            echo "wheel_files=${WHEEL_FILES}" >> $GITHUB_OUTPUT
-            echo "## Built Wheels" >> $GITHUB_STEP_SUMMARY
-            for whl in dist/*.whl; do
-              [ -f "$whl" ] || continue
-              echo "- $(basename $whl)" >> $GITHUB_STEP_SUMMARY
-            done
-          else
-            echo "build_status=failed" >> $GITHUB_OUTPUT
+          echo "status=${BUILD_STATUS}" >> $GITHUB_OUTPUT
+          if [ ${BUILD_STATUS} -eq 0 ]; then
+            WHL=$(ls dist/*.whl 2>/dev/null | head -1)
+            echo "wheel=${WHL}" >> $GITHUB_OUTPUT
+            echo "Build succeeded: ${WHL}"
           fi
+          exit ${BUILD_STATUS}
 
       - name: Show ccache statistics
         if: always()
         run: |
           echo "## CCache Statistics" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache --show-stats >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -171,77 +151,64 @@ jobs:
         with:
           name: build-log-${{ github.run_number }}
           path: /tmp/build.log
-          retention-days: 7
+          if-no-files-found: warn
 
       - name: Upload wheel
-        if: success()
+        if: steps.build.outputs.status == '0'
         uses: actions/upload-artifact@v4
         with:
           name: torch_npu-wheel-${{ github.run_number }}
           path: ascend_pytorch/dist/*.whl
-          retention-days: 7
+          if-no-files-found: warn
 
-      - name: Generate build summary
+      - name: Build summary
         if: always()
         run: |
-          BUILD_STATUS="${{ steps.build.outputs.build_status }}"
-          TORCH_VERSION="${{ steps.install-torch.outputs.torch_version }}"
-          COMMIT_HASH="${{ steps.clone.outputs.commit_hash }}"
-          COMMIT_SHORT="${{ steps.clone.outputs.commit_short }}"
-          COMMIT_DATE="${{ steps.clone.outputs.commit_date }}"
-          PATCH_APPLIED="${{ steps.patches.outputs.patch_applied }}"
-          PATCH_FAILED="${{ steps.patches.outputs.patch_failed }}"
+          BUILD_STATUS="${{ steps.build.outputs.status }}"
+          if [ "${BUILD_STATUS}" = "0" ]; then
+            STATUS_ICON="SUCCESS"
+          else
+            STATUS_ICON="FAILED"
+          fi
 
-          # Build info table
           echo "## Build Information" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Item | Details |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|---------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Build Time | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
-          echo "| PyTorch Nightly | ${TORCH_VERSION} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Ascend/pytorch Commit | [${COMMIT_SHORT}](https://github.com/Ascend/pytorch/commit/${COMMIT_HASH}) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Commit Time | ${COMMIT_DATE} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Applied Patches | ${PATCH_APPLIED:-None} |" >> $GITHUB_STEP_SUMMARY
-          if [ -n "$PATCH_FAILED" ]; then
-            echo "| Failed Patches | ${PATCH_FAILED} |" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Time | $(date -u '+%Y-%m-%d %H:%M UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "| PyTorch Nightly | \`${{ steps.install_torch.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Ascend/pytorch Commit | [\`${{ steps.clone_repo.outputs.commit_short }}\`](https://github.com/Ascend/pytorch/commit/${{ steps.clone_repo.outputs.commit }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit Time | ${{ steps.clone_repo.outputs.commit_date }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Applied Patches | ${{ steps.patch.outputs.applied || '(None)' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Result | ${STATUS_ICON} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
-          # CCache hit rate
-          CCACHE_STATS=$(ccache --show-stats 2>/dev/null || echo "")
-          if [ -n "$CCACHE_STATS" ]; then
-            # Parse new ccache output format: "  Hits: 14 / 519" and "  Misses: 505 / 519"
-            CACHE_HIT=$(echo "$CCACHE_STATS" | grep -E "^\s*Hits:" | awk '{print $2}' | tr -d '/' || echo "0")
-            CACHE_MISS=$(echo "$CCACHE_STATS" | grep -E "^\s*Misses:" | awk '{print $2}' | tr -d '/' || echo "0")
-            if [ -n "$CACHE_HIT" ] && [ -n "$CACHE_MISS" ] && { [ "$CACHE_HIT" != "0" ] || [ "$CACHE_MISS" != "0" ]; }; then
-              HIT_RATE=$(awk "BEGIN {if (($CACHE_HIT + $CACHE_MISS) > 0) printf \"%.1f%%\", ($CACHE_HIT / ($CACHE_HIT + $CACHE_MISS)) * 100; else print \"0.0%\"}")
-              echo "| CCache Hit Rate | ${HIT_RATE} |" >> $GITHUB_STEP_SUMMARY
-            fi
-          fi
-
-          # Build result
-          if [ "$BUILD_STATUS" = "success" ]; then
-            echo "| Build Result | :white_check_mark: SUCCESS |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "| Build Result | :x: FAILED |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Check the build-log artifact for details." >> $GITHUB_STEP_SUMMARY
-          fi
-
-          # Compatibility issues report from issues/
+          # Output compatibility issues report
           if [ -d "issues" ]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## 兼容性问题分析报告" >> $GITHUB_STEP_SUMMARY
+            echo "## Compatibility Issues Report" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             for issue in issues/*.md; do
               [ -f "$issue" ] || continue
               echo "### $(basename "$issue" .md)" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
-              # Extract key sections
-              sed -n '/^## 问题描述/,/^## /p' "$issue" | head -n -1 >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
-              sed -n '/^## 根本原因分析/,/^## /p' "$issue" | head -n -1 >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
-              sed -n '/^## 修复方案/,/^## /p' "$issue" | head -n -1 >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
+              sed -n '/^## 问题描述/,/^## /p' "$issue" | head -n -1 >> $GITHUB_STEP_SUMMARY
+              sed -n '/^## 根本原因分析/,/^## /p' "$issue" | head -n -1 >> $GITHUB_STEP_SUMMARY
+              sed -n '/^## 修复方案/,/^## /p' "$issue" | head -n -1 >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
               echo "---" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
             done
+          fi
+
+          # Output build result
+          echo "## Build Result" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${BUILD_STATUS}" = "0" ]; then
+            echo "Build succeeded" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Wheel: \`${{ steps.build.outputs.wheel }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Build failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check build-log artifact for details" >> $GITHUB_STEP_SUMMARY
           fi
