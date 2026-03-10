@@ -23,9 +23,7 @@
 1. `actions/checkout@v4`
 2. `actions/setup-python@v5`，版本使用 `${{ env.PYTHON_VERSION }}`
 3. 安装系统依赖：`cmake ninja-build gcc g++ git patchelf ccache`
-4. 设置 ccache：`actions/cache@v4`（或 `cache/restore`）
-5. 配置 ccache：设置 max-size、zero-stats、环境变量
-6. 安装 PyTorch nightly：
+4. 安装 PyTorch nightly：
    - 升级 pip
    - **版本格式（重要）**：`torch==${MAJOR}.dev${DATE}+cpu`
      - `${MAJOR}`：主版本号，**不能固定**，需依次尝试：`2.12.0` → `2.11.0` → `2.10.0`
@@ -36,6 +34,8 @@
      - 若指定日期：依次尝试 `torch==2.12.0.dev${DATE}+cpu` → `torch==2.11.0.dev${DATE}+cpu` → `torch==2.10.0.dev${DATE}+cpu`，直到成功
      - 否则：安装最新 `torch --pre`（从 nightly/cpu 索引）
    - 输出版本到 `$GITHUB_OUTPUT`
+5. 设置 ccache：`actions/cache@v4`（key 包含 torch 版本号）
+6. 配置 ccache：设置 max-size、zero-stats、环境变量
 7. 克隆 `Ascend/pytorch`：
    - 参数：`--depth=1 --recurse-submodules`
    - 目标目录：`ascend_pytorch`
@@ -56,6 +56,15 @@
 
 ## 4. ccache 规则
 
+### 步骤顺序要求
+
+**重要**：ccache setup 步骤必须在安装 PyTorch nightly 之后执行，因为 cache key 需要包含 torch 版本号。
+
+正确顺序：
+1. 安装系统依赖
+2. 安装 PyTorch nightly（输出版本到 `$GITHUB_OUTPUT`）
+3. Setup ccache（使用 torch 版本号构建 key）
+
 ### 缓存 Action 选择
 
 **方案一（推荐）：单一 `actions/cache@v4`**
@@ -69,25 +78,32 @@
 ### 缓存 Key 策略
 
 - 缓存路径：`~/.ccache`
-- Key 格式：`ccache-{os}-py{python_version}-{ref_name}-{run_id}`
+- Key 格式：`ccache-{os}-py{python_version}-torch{torch_version}-{ref_name}-{run_id}`
 - `restore-keys`（按优先级排序，从高到低）：
-  1. `ccache-{os}-py{python_version}-{ref_name}-` - 同分支最新缓存
-  2. `ccache-{os}-py{python_version}-` - 同 Python 版本最新缓存
-  3. `ccache-{os}-` - 同操作系统最新缓存
+  1. `ccache-{os}-py{python_version}-torch{torch_version}-{ref_name}-` - 同分支、同 PyTorch 版本
+  2. `ccache-{os}-py{python_version}-torch{torch_version}-` - 同 PyTorch 版本
+  3. `ccache-{os}-py{python_version}-{ref_name}-` - 同分支、同 Python 版本
+  4. `ccache-{os}-py{python_version}-` - 同 Python 版本
+  5. `ccache-{os}-` - 同操作系统（兜底）
 
 **设计原理**：
-- 第一级：优先使用同分支的缓存，代码差异最小
-- 第二级：其次使用同 Python 版本的缓存，ABI 兼容
-- 第三级：最后使用同操作系统的缓存，作为兜底
+- 第一级：同 PyTorch 版本 + 同分支，编译产物最相近，命中率最高
+- 第二级：同 PyTorch 版本，ABI 完全兼容
+- 第三级：同分支 + 同 Python 版本，代码差异小
+- 第四级：同 Python 版本，ABI 兼容
+- 第五级：操作系统兜底
 
 **示例配置**：
 ```yaml
+# 注意：此步骤必须在 install_torch 之后
 - name: Setup ccache
   uses: actions/cache@v4
   with:
     path: ~/.ccache
-    key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}-${{ github.run_id }}
+    key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-torch${{ steps.install_torch.outputs.version }}-${{ github.ref_name }}-${{ github.run_id }}
     restore-keys: |
+      ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-torch${{ steps.install_torch.outputs.version }}-${{ github.ref_name }}-
+      ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-torch${{ steps.install_torch.outputs.version }}-
       ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}-
       ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
       ccache-${{ runner.os }}-

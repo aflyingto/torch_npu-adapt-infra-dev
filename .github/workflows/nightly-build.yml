@@ -42,24 +42,6 @@ jobs:
             patchelf \
             ccache
 
-      - name: Setup ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}-${{ github.run_id }}
-          restore-keys: |
-            ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}-
-            ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
-            ccache-${{ runner.os }}-
-
-      - name: Configure ccache
-        run: |
-          ccache --max-size=2G
-          ccache --zero-stats
-          echo "CC=ccache gcc" >> $GITHUB_ENV
-          echo "CXX=ccache g++" >> $GITHUB_ENV
-          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
-
       - name: Install PyTorch nightly (CPU, x86_64)
         id: install_torch
         run: |
@@ -81,6 +63,26 @@ jobs:
           TORCH_VER=$(python -c "import torch; print(torch.__version__)")
           echo "version=${TORCH_VER}" >> $GITHUB_OUTPUT
           echo "PyTorch nightly version: ${TORCH_VER}"
+
+      - name: Setup ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-torch${{ steps.install_torch.outputs.version }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-torch${{ steps.install_torch.outputs.version }}-${{ github.ref_name }}-
+            ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-torch${{ steps.install_torch.outputs.version }}-
+            ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-${{ github.ref_name }}-
+            ccache-${{ runner.os }}-py${{ env.PYTHON_VERSION }}-
+            ccache-${{ runner.os }}-
+
+      - name: Configure ccache
+        run: |
+          ccache --max-size=2G
+          ccache --zero-stats
+          echo "CC=ccache gcc" >> $GITHUB_ENV
+          echo "CXX=ccache g++" >> $GITHUB_ENV
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
 
       - name: Clone Ascend/pytorch (with submodules)
         id: clone_repo
