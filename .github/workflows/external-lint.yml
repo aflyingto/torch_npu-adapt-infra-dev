@@ -189,8 +189,19 @@ jobs:
             pre-commit-${{ env.PYTHON_VERSION }}-
             pre-commit-
 
+      - name: Configure Git for pre-commit
+        run: |
+          # 配置 Git 使用 GitHub token 进行认证
+          git config --global url."https://github.com/".insteadOf "https://github.com/"
+          # 禁用终端提示
+          git config --global credential.helper store
+          echo "https://${{ github.token }}@github.com" > ~/.git-credentials
+
       - name: Run pre-commit
         id: lint
+        env:
+          GIT_TERMINAL_PROMPT: 0
+          PRE_COMMIT_HOME: /home/runner/.cache/pre-commit
         run: |
           cd target-repo
 
