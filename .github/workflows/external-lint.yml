@@ -191,11 +191,12 @@ jobs:
 
       - name: Configure Git for pre-commit
         run: |
-          # 配置 Git 使用 GitHub token 进行认证
-          git config --global url."https://github.com/".insteadOf "https://github.com/"
+          # 配置 Git 使用 GitHub token 进行认证（URL 重写方式）
+          git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
           # 禁用终端提示
           git config --global credential.helper store
-          echo "https://${{ github.token }}@github.com" > ~/.git-credentials
+          # 设置 HOME 环境变量确保 pre-commit 子进程使用相同配置
+          echo "HOME=$HOME" >> $GITHUB_ENV
 
       - name: Run pre-commit
         id: lint
