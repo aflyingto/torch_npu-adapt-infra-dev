@@ -1,0 +1,91 @@
+# Pre-commit 配置文件
+# 用于检测 PyTorch 代码规范
+# 文档: https://pre-commit.com
+
+default_stages: [commit]
+fail_fast: false
+
+repos:
+  # 通用检查
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        name: 修复行尾空白
+      - id: end-of-file-fixer
+        name: 确保文件以换行结尾
+      - id: check-yaml
+        name: 检查 YAML 语法
+        args: [--unsafe]
+      - id: check-json
+        name: 检查 JSON 语法
+      - id: check-merge-conflict
+        name: 检查合并冲突标记
+      - id: check-case-conflict
+        name: 检查文件名大小写冲突
+      - id: detect-private-key
+        name: 检测私钥文件
+      - id: forbid-new-submodules
+        name: 禁止新增 submodule
+      - id: check-added-large-files
+        name: 检查大文件
+        args: [--maxkb=500]
+
+  # Python 代码检查
+  - repo: https://github.com/psf/black
+    rev: 24.3.0
+    hooks:
+      - id: black
+        name: Python 代码格式化 (Black)
+        language_version: python3
+
+  - repo: https://github.com/pyc/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        name: Python import 排序
+        args: [--profile, black]
+
+  - repo: https://github.com/pyc/flake8
+    rev: 7.0.0
+    hooks:
+      - id: flake8
+        name: Python 代码风格检查 (Flake8)
+        args: [--max-line-length=120, --ignore=E203,W503,E501]
+
+  # C/C++ 代码格式化
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.1
+    hooks:
+      - id: clang-format
+        name: C/C++ 代码格式化
+        types_or: [c, c++, cuda]
+
+  # Shell 脚本检查
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        name: Shell 脚本检查
+
+  # CMake 格式化
+  - repo: https://github.com/cheshirekow/cmake-format-precommit
+    rev: v0.6.13
+    hooks:
+      - id: cmake-format
+        name: CMake 格式化
+      - id: cmake-lint
+        name: CMake 代码检查
+
+# CI 配置
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit.com hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false

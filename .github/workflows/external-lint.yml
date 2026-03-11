@@ -1,0 +1,436 @@
+name: External Repo Pre-commit Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: 'Target repository (owner/repo or URL)'
+        required: true
+        default: 'pytorch/pytorch'
+      target_branch:
+        description: 'Target branch (default: main)'
+        required: false
+        default: 'main'
+      config_source:
+        description: 'Config file source'
+        required: true
+        default: 'local'
+        type: choice
+        options:
+          - local
+          - target
+          - custom
+      custom_config_repo:
+        description: 'Custom config repo (only if config_source=custom)'
+        required: false
+        default: ''
+      custom_config_path:
+        description: 'Config file path in custom repo'
+        required: false
+        default: '.pre-commit-config.yaml'
+      check_all_files:
+        description: 'Check all files'
+        required: true
+        default: true
+        type: boolean
+      file_filter:
+        description: 'File filter patterns (space separated, e.g. "*.py *.cpp")'
+        required: false
+        default: ''
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  external-lint:
+    name: Check external repository
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout config repo (local)
+        if: inputs.config_source == 'local'
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .pre-commit-config.yaml
+            .clang-format
+            .editorconfig
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout custom config repo
+        if: inputs.config_source == 'custom'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.custom_config_repo }}
+          sparse-checkout: |
+            ${{ inputs.custom_config_path }}
+          sparse-checkout-cone-mode: false
+          path: config-repo
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install pre-commit
+        run: |
+          pip install pre-commit
+          pre-commit --version
+
+      - name: Parse repository info
+        id: repo_info
+        run: |
+          REPO_INPUT="${{ inputs.target_repo }}"
+
+          # 解析仓库地址
+          if [[ "$REPO_INPUT" == https://* ]] || [[ "$REPO_INPUT" == git://* ]]; then
+            # 完整 URL
+            REPO_URL="$REPO_INPUT"
+            REPO_NAME=$(echo "$REPO_INPUT" | sed 's/.*github.com[\/:]\(.*\)\.git/\1/' | sed 's/.*github.com[\/:]\(.*\)/\1/')
+          else
+            # owner/repo 格式
+            REPO_URL="https://github.com/${REPO_INPUT}.git"
+            REPO_NAME="$REPO_INPUT"
+          fi
+
+          echo "repo_url=${REPO_URL}" >> $GITHUB_OUTPUT
+          echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
+
+          # 设置分支
+          BRANCH="${{ inputs.target_branch }}"
+          if [ -z "$BRANCH" ]; then
+            BRANCH="main"
+          fi
+          echo "branch=${BRANCH}" >> $GITHUB_OUTPUT
+
+          echo "Target: ${REPO_NAME}@${BRANCH}"
+
+      - name: Clone target repository
+        id: target_info
+        run: |
+          echo "Cloning ${{ steps.repo_info.outputs.repo_name }}..."
+          git clone --depth=1 --branch=${{ steps.repo_info.outputs.branch }} \
+            ${{ steps.repo_info.outputs.repo_url }} target-repo
+
+          # 记录仓库信息
+          cd target-repo
+          COMMIT_SHA=$(git rev-parse HEAD)
+          COMMIT_DATE=$(git log -1 --format=%cd --date=short)
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "commit_date=${COMMIT_DATE}" >> $GITHUB_OUTPUT
+
+          # 统计文件数量
+          PYTHON_COUNT=$(find . -type f -name "*.py" | wc -l)
+          CPP_COUNT=$(find . -type f \( -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" \) | wc -l)
+          C_COUNT=$(find . -type f -name "*.c" | wc -l)
+          HEADER_COUNT=$(find . -type f \( -name "*.h" -o -name "*.hpp" -o -name "*.hxx" \) | wc -l)
+          CUDA_COUNT=$(find . -type f \( -name "*.cu" -o -name "*.cuh" \) | wc -l)
+          SHELL_COUNT=$(find . -type f -name "*.sh" | wc -l)
+
+          TOTAL=$((PYTHON_COUNT + CPP_COUNT + C_COUNT + HEADER_COUNT + CUDA_COUNT + SHELL_COUNT))
+
+          echo "python_count=${PYTHON_COUNT}" >> $GITHUB_OUTPUT
+          echo "cpp_count=${CPP_COUNT}" >> $GITHUB_OUTPUT
+          echo "c_count=${C_COUNT}" >> $GITHUB_OUTPUT
+          echo "header_count=${HEADER_COUNT}" >> $GITHUB_OUTPUT
+          echo "cuda_count=${CUDA_COUNT}" >> $GITHUB_OUTPUT
+          echo "shell_count=${SHELL_COUNT}" >> $GITHUB_OUTPUT
+          echo "file_count=${TOTAL}" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "=== Repository Statistics ==="
+          echo "Python files: ${PYTHON_COUNT}"
+          echo "C++ files: ${CPP_COUNT}"
+          echo "C files: ${C_COUNT}"
+          echo "Header files: ${HEADER_COUNT}"
+          echo "CUDA files: ${CUDA_COUNT}"
+          echo "Shell files: ${SHELL_COUNT}"
+          echo "Total code files: ${TOTAL}"
+
+      - name: Prepare config file
+        run: |
+          CONFIG_SOURCE="${{ inputs.config_source }}"
+
+          if [ "$CONFIG_SOURCE" = "local" ]; then
+            # 使用本仓库配置
+            if [ -f ".pre-commit-config.yaml" ]; then
+              cp .pre-commit-config.yaml target-repo/
+              echo "Using local config from current repository"
+            else
+              echo "Error: No .pre-commit-config.yaml found in current repo"
+              exit 1
+            fi
+          elif [ "$CONFIG_SOURCE" = "custom" ]; then
+            # 使用指定仓库配置
+            CONFIG_PATH="${{ inputs.custom_config_path }}"
+            if [ -f "config-repo/${CONFIG_PATH}" ]; then
+              cp "config-repo/${CONFIG_PATH}" target-repo/.pre-commit-config.yaml
+              echo "Using custom config from ${{ inputs.custom_config_repo }}"
+            else
+              echo "Error: Config file not found in custom repo"
+              exit 1
+            fi
+          else
+            # 使用目标仓库配置
+            if [ -f "target-repo/.pre-commit-config.yaml" ]; then
+              echo "Using target repo config"
+            else
+              echo "Error: No .pre-commit-config.yaml found in target repo"
+              exit 1
+            fi
+          fi
+
+      - name: Cache pre-commit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ env.PYTHON_VERSION }}-${{ hashFiles('target-repo/.pre-commit-config.yaml') }}
+          restore-keys: |
+            pre-commit-${{ env.PYTHON_VERSION }}-
+            pre-commit-
+
+      - name: Run pre-commit
+        id: lint
+        run: |
+          cd target-repo
+
+          echo "Running pre-commit checks..."
+          echo ""
+
+          # 执行检查
+          pre-commit run --all-files 2>&1 | tee /tmp/pre-commit-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+
+          echo "exit_code=${EXIT_CODE}" >> $GITHUB_OUTPUT
+
+          # 统计结果
+          PASSED=$(grep -c "Passed" /tmp/pre-commit-output.txt || echo "0")
+          FAILED=$(grep -c "Failed" /tmp/pre-commit-output.txt || echo "0")
+          SKIPPED=$(grep -c "Skipped" /tmp/pre-commit-output.txt || echo "0")
+
+          echo "passed=${PASSED}" >> $GITHUB_OUTPUT
+          echo "failed=${FAILED}" >> $GITHUB_OUTPUT
+          echo "skipped=${SKIPPED}" >> $GITHUB_OUTPUT
+
+          exit $EXIT_CODE
+        continue-on-error: true
+
+      - name: Generate report
+        run: |
+          echo "## Pre-commit 外部仓库检查报告" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # 仓库信息表格
+          echo "### 目标仓库信息" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 项目 | 值 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| 仓库 | [${{ steps.repo_info.outputs.repo_name }}](https://github.com/${{ steps.repo_info.outputs.repo_name }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 分支 | \`${{ steps.repo_info.outputs.branch }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ steps.target_info.outputs.commit_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit 日期 | ${{ steps.target_info.outputs.commit_date }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # 文件统计
+          echo "### 文件统计" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 文件类型 | 数量 |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Python | ${{ steps.target_info.outputs.python_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| C++ | ${{ steps.target_info.outputs.cpp_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| C | ${{ steps.target_info.outputs.c_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Header | ${{ steps.target_info.outputs.header_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| CUDA | ${{ steps.target_info.outputs.cuda_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Shell | ${{ steps.target_info.outputs.shell_count }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **总计** | **${{ steps.target_info.outputs.file_count }}** |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # 检查结果统计
+          echo "### 检查结果统计" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 状态 | 数量 |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 通过 | ${{ steps.lint.outputs.passed }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 失败 | ${{ steps.lint.outputs.failed }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 跳过 | ${{ steps.lint.outputs.skipped }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # 详细检查结果
+          echo "### 检查结果详情" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '<details>' >> $GITHUB_STEP_SUMMARY
+          echo '<summary>点击展开查看完整检查输出</summary>' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat /tmp/pre-commit-output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '</details>' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # 结果判断
+          if [ "${{ steps.lint.outcome }}" = "failure" ]; then
+            echo "### 问题汇总" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "检测到代码规范问题，建议目标仓库维护者进行修复。" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # 提取失败的检查项
+            echo "#### 失败的检查项" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            grep -E "^(Fail|Failed)" /tmp/pre-commit-output.txt | while read line; do
+              echo "- ${line}" >> $GITHUB_STEP_SUMMARY
+            done || true
+          else
+            echo "### 检查结果" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "所有检查项均已通过，代码规范符合要求。" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytorch-lint-results-${{ github.run_number }}
+          path: |
+            /tmp/pre-commit-output.txt
+          retention-days: 30
+
+      - name: Check result
+        if: steps.lint.outcome == 'failure'
+        run: |
+          echo "::warning::Pre-commit 检查发现问题，请查看详细报告"
+          exit 1
+
+      - name: Prepare Issue content
+        if: steps.lint.outcome == 'failure'
+        id: issue_content
+        run: |
+          # 生成 Issue 标题
+          TITLE="[代码规范检查] ${{ steps.repo_info.outputs.repo_name }}@${{ steps.repo_info.outputs.branch }} - 发现 ${{ steps.lint.outputs.failed }} 个问题"
+          echo "title<<EOF" >> $GITHUB_OUTPUT
+          echo "$TITLE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # 生成 Issue 内容
+          cat > /tmp/issue-body.md << 'ISSUE_EOF'
+          ## 代码规范检查报告
+
+          ### 目标仓库信息
+
+          | 项目 | 值 |
+          |------|-----|
+          | 仓库 | [${{ steps.repo_info.outputs.repo_name }}](https://github.com/${{ steps.repo_info.outputs.repo_name }}) |
+          | 分支 | `${{ steps.repo_info.outputs.branch }}` |
+          | Commit | `${{ steps.target_info.outputs.commit_sha }}` |
+          | Commit 日期 | ${{ steps.target_info.outputs.commit_date }} |
+
+          ### 文件统计
+
+          | 文件类型 | 数量 |
+          |----------|------|
+          | Python | ${{ steps.target_info.outputs.python_count }} |
+          | C++ | ${{ steps.target_info.outputs.cpp_count }} |
+          | C | ${{ steps.target_info.outputs.c_count }} |
+          | Header | ${{ steps.target_info.outputs.header_count }} |
+          | CUDA | ${{ steps.target_info.outputs.cuda_count }} |
+          | Shell | ${{ steps.target_info.outputs.shell_count }} |
+          | **总计** | **${{ steps.target_info.outputs.file_count }}** |
+
+          ### 检查结果统计
+
+          | 状态 | 数量 |
+          |------|------|
+          | 通过 | ${{ steps.lint.outputs.passed }} |
+          | 失败 | ${{ steps.lint.outputs.failed }} |
+          | 跳过 | ${{ steps.lint.outputs.skipped }} |
+
+          ### 详细检查输出
+
+          <details>
+          <summary>点击展开查看完整检查输出</summary>
+
+          ```
+          ISSUE_EOF
+
+          # 追加检查输出（需要转义）
+          cat /tmp/pre-commit-output.txt >> /tmp/issue-body.md
+
+          cat >> /tmp/issue-body.md << 'ISSUE_EOF2'
+          ```
+          </details>
+
+          ### 修复建议
+
+          1. **自动修复**（推荐）
+             ```bash
+             # 克隆目标仓库
+             git clone https://github.com/${{ steps.repo_info.outputs.repo_name }}.git
+             cd $(basename ${{ steps.repo_info.outputs.repo_name }})
+
+             # 安装 pre-commit
+             pip install pre-commit
+
+             # 执行检查并自动修复
+             pre-commit run --all-files
+             ```
+
+          2. **手动修复**
+             - 详见上方检查输出中的具体问题
+
+          ---
+
+          **注意**: 此 Issue 由自动化检查生成，如需关闭请确保问题已修复或手动关闭。
+          ISSUE_EOF2
+
+          echo "body_file=/tmp/issue-body.md" >> $GITHUB_OUTPUT
+
+      - name: Create Issue for failed checks
+        if: steps.lint.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('${{ steps.issue_content.outputs.body_file }}', 'utf8');
+            const title = `${{ steps.issue_content.outputs.title }}`;
+
+            // 检查是否已存在相同 Issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'code-lint,external-check'
+            });
+
+            // 查找是否已存在针对同一仓库同一分支的 Issue
+            const repoName = '${{ steps.repo_info.outputs.repo_name }}';
+            const branch = '${{ steps.repo_info.outputs.branch }}';
+            const existingIssue = issues.data.find(issue =>
+              issue.title.includes(repoName) &&
+              issue.title.includes(branch) &&
+              issue.title.includes('代码规范检查')
+            );
+
+            if (existingIssue) {
+              // 更新现有 Issue
+              const updateBody = `## 更新检查报告\n\n${body}\n\n---\n*此评论为 Issue 更新，原 Issue #${existingIssue.number} 保持开放。*`;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: updateBody
+              });
+              console.log(`Updated existing issue #${existingIssue.number}`);
+            } else {
+              // 创建新 Issue
+              const issue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['code-lint', 'external-check', 'automated'],
+                assignees: []
+              });
+              console.log(`Created new issue #${issue.data.number}`);
+            }
