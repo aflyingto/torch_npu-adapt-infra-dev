@@ -272,22 +272,6 @@ jobs:
           echo "| 跳过 | ${{ steps.lint.outputs.skipped }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # 详细检查结果（限制输出大小，最多 100KB）
-          echo "### 检查结果详情" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '<details>' >> $GITHUB_STEP_SUMMARY
-          echo '<summary>点击展开查看检查输出（前 100KB）</summary>' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          head -c 102400 /tmp/pre-commit-output.txt >> $GITHUB_STEP_SUMMARY || true
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '</details>' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "完整输出请下载 artifact 查看。" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
           # 结果判断
           if [ "${{ steps.lint.outcome }}" = "failure" ]; then
             echo "### 问题汇总" >> $GITHUB_STEP_SUMMARY
@@ -295,17 +279,36 @@ jobs:
             echo "检测到代码规范问题，建议目标仓库维护者进行修复。" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
 
-            # 提取失败的检查项
+            # 提取失败的检查项（仅显示检查项名称，不显示详细文件列表）
             echo "#### 失败的检查项" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            grep -E "^(Fail|Failed)" /tmp/pre-commit-output.txt | head -50 | while read line; do
-              echo "- ${line}" >> $GITHUB_STEP_SUMMARY
+            grep -E "^(Fail|Failed)" /tmp/pre-commit-output.txt | sed 's/Failed//' | sed 's/^ *//' | sort -u | while read hook; do
+              if [ -n "$hook" ]; then
+                echo "- ${hook}" >> $GITHUB_STEP_SUMMARY
+              fi
             done || true
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # 统计各类问题数量
+            echo "#### 问题类型统计" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| 检查项 | 问题文件数 |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|------------|" >> $GITHUB_STEP_SUMMARY
+            grep -E "^Fixing " /tmp/pre-commit-output.txt | awk '{print $2}' | xargs -I{} dirname {} 2>/dev/null | sort | uniq -c | sort -rn | head -20 | while read count dir; do
+              echo "| \`${dir}\` | ${count} |" >> $GITHUB_STEP_SUMMARY
+            done || true
+            echo "" >> $GITHUB_STEP_SUMMARY
           else
             echo "### 检查结果" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "所有检查项均已通过，代码规范符合要求。" >> $GITHUB_STEP_SUMMARY
           fi
+
+          # 提示下载完整报告
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📄 **完整检查报告已上传至 Artifact，请下载 \`pytorch-lint-results-${{ github.run_number }}\` 查看。**" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload results
         if: always()
