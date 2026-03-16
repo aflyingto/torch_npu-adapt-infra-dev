@@ -40,6 +40,9 @@
    - 参数：`--depth=1 --recurse-submodules`
    - 目标目录：`ascend_pytorch`
    - 记录 commit 信息（完整 hash、短 hash、日期）
+   - **子模块 URL 替换（必须）**：克隆后替换无法访问的 gitee 镜像为 GitHub 原版
+     - `gitee.com/mirrors/libuv` → `github.com/libuv/libuv`
+     - 使用 `git config` 在克隆前配置 URL 重写
 8. 安装 Python 构建依赖：`pyyaml setuptools auditwheel`
 9. 应用兼容性 patches：
    - 遍历 `patches/` 目录下所有 `.patch` 文件

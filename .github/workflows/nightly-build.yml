@@ -87,6 +87,8 @@ jobs:
       - name: Clone Ascend/pytorch (with submodules)
         id: clone_repo
         run: |
+          # Configure git URL rewrite for gitee mirrors that require authentication
+          git config --global url."https://github.com/libuv/libuv".insteadOf "https://gitee.com/mirrors/libuv"
           git clone --depth=1 --recurse-submodules \
             https://github.com/Ascend/pytorch.git ascend_pytorch
           cd ascend_pytorch
