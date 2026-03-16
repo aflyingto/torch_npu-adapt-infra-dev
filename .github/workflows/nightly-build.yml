@@ -86,13 +86,21 @@ jobs:
 
       - name: Clone Ascend/pytorch (with submodules)
         id: clone_repo
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # 配置 URL 重写规则，替换 gitee 镜像为 GitHub 原版
-          git config --global url."https://github.com/libuv/libuv.git".insteadOf "https://gitee.com/mirrors/libuv.git"
-          git config --global url."https://github.com/libuv/libuv.git".insteadOf "https://gitee.com/mirrors/libuv"
+          # 禁止交互式 git 提示（避免认证挂起）
+          export GIT_TERMINAL_PROMPT=0
 
+          # 配置全局 URL 重写规则（使用 GitHub Token 认证）
+          # 注意：公共仓库不需要认证，但设置 token 可以避免某些边缘情况
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/libuv/libuv.git".insteadOf "https://gitee.com/mirrors/libuv.git"
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/libuv/libuv.git".insteadOf "https://gitee.com/mirrors/libuv"
+
+          # 克隆主仓库并递归初始化子模块
           git clone --depth=1 --recurse-submodules \
             https://github.com/Ascend/pytorch.git ascend_pytorch
+
           cd ascend_pytorch
           COMMIT=$(git rev-parse HEAD)
           COMMIT_SHORT=$(git rev-parse --short HEAD)
